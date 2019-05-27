@@ -1,0 +1,712 @@
+Option Explicit
+
+Dim fso
+Dim Instrname
+Dim scriptpath, parampath, csvpath, poolpath
+Dim xl, wb, ws, ws_run, wb_param
+Dim wb_csv, ws_csv
+Dim wb_pool, ws_v7, ws_other
+Dim table, data
+Dim elem, item, param
+Dim dic_x, dic_y
+
+
+' 上传模板支持多个路径，用;分隔文件路径
+
+
+' 初始化常量
+Const symbol = "元素符号"
+Const unit = "单位"
+Const upper = "上限"
+Const limit = "定量限"
+Const high = "高值"
+Const low = "低值"
+Const RSD = "最大允许RSD"
+Const ALE = "最大允许误差"
+Const digits = "小数位数"
+Const QC1 = "QC1传输字符串"
+Const QC2 = "QC2传输字符串"
+Const uploadpath = "上传模板路径"
+Const pool = "汇总池路径"
+
+
+Dim start
+start = timer()
+
+main
+
+msgbox cstr(timer-start) & "s"
+
+
+sub test()
+
+	item = "V7"
+	elem = "All"
+	
+	msgbox get_param(table, item, elem, pool)
+
+end sub
+
+
+Sub main()
+	
+	Set fso = createobject("scripting.filesystemobject")
+	' set shell = createobject("Wscript.Shell")
+	
+	' 脚本路径
+	scriptpath = fso.getparentfoldername(wscript.scriptfullname)
+	
+	' 仪器名称（用于数据打印的标题设置）
+	Instrname =  split(fso.getfilename(wscript.scriptfullname), ".vbs")(0)
+	
+	' 项目参数路径
+	parampath = fso.buildpath(scriptpath, "项目参数.csv")
+	
+	If Not fso.fileexists(parampath) Then
+		msgbox "项目参数文件不存在，请确认 " & parampath
+		Set fso = Nothing
+		Exit Sub
+	End If
+	
+	On Error Resume Next
+	Set xl = GetObject(, "excel.application")
+	
+	Set wb = xl.activeworkbook
+	Set ws = wb.worksheets("Sheet1")
+	Set ws_run = wb.worksheets("Sheet2")
+	On Error GoTo 0
+	
+	If isempty(xl) Then
+		MsgBox "未找到Excel"
+		Exit Sub
+	End If
+	
+	If TypeName(wb) = "Nothing" Then
+		MsgBox "未找到工作簿"
+		xl.quit()
+		Set xl = Nothing
+		Exit Sub
+	End If
+	
+	If isempty(ws) Then
+		MsgBox "未找到工作表"
+		Set xl = Nothing
+		Exit Sub
+	End If
+	
+	
+	' ----------------------读取项目参数----------------------
+	Set wb_param = xl.workbooks.open(parampath, , True)
+	table = wb_param.worksheets(1).usedrange
+	wb_param.close(False)
+	
+	If Not isarray(table) Or ubound(table) = 1 Then
+		msgbox "项目参数文件中无参数，请确认"
+		Set xl = Nothing
+		Exit Sub
+	End If
+	
+	set dic_x = createobject("scripting.dictionary")
+	set dic_y = createobject("scripting.dictionary")
+	dim i
+	for i = 1 to ubound(xl.index(table,1))
+		dic_y.add table(1,i), i
+	next
+	for i = 2 to ubound(table)
+		dic_x.add table(i,1) & table(i,2), i
+		if not dic_x.exists(table(i,1)) then
+			dic_x.add table(i,1), i
+		end if
+	next
+	Set wb_param = Nothing
+	
+	
+	' 根据文件名后缀判断项目
+	Dim suffix 
+	suffix = split(split(wb.name, "-")(1), ".xls")(0)
+	Select Case suffix
+		Case "I" item = "I"
+		Case "U" item = "U"
+		Case "X" item = "X"
+		Case "A" item = "A"
+		Case "S" item = "S"
+		Case "L" item = "L"
+		Case Else item = "V7"
+	End Select
+	
+	' 确认上传模板和汇总池路径是否存在
+	csvpath = split(cstr(get_param(table, item, "All", uploadpath)), ";")
+	poolpath = cstr(get_param(table, item, "All", pool))
+	
+	With fso
+		For i = 0 To ubound(csvpath)
+			If Not .fileexists(csvpath(i)) Then
+				msgbox "未找到上传模板文件，请确认路径 " & csvpath
+				Set ws = Nothing
+				Set wb = Nothing
+				Set xl = Nothing
+				Set fso = Nothing
+				Exit Sub
+			End If
+		Next
+		If Not .folderexists(poolpath) Then
+			msgbox "汇总池路径不存在,请确认 " & poolpath
+			Set ws = Nothing
+			Set wb = Nothing
+			Set xl = Nothing
+			Set fso = Nothing
+			Exit Sub
+		End If
+	End With
+	
+	' ------------------程序开始------------------ 
+	
+	
+	Dim path
+	Dim today
+	today = year(date) & right(0&month(date),2) & right(0&day(date),2)
+	
+	' 新建汇总池文件夹
+	With fso
+		path = .buildpath(poolpath, left(today,4))
+		If Not .folderexists(path) Then
+			.createfolder(path)
+		End If
+		path = .buildpath(path, left(today,6))
+		If Not .folderexists(path) Then
+			.createfolder(path)
+		End If
+	End With
+	
+	' 新建汇总池工作簿
+	Dim v7, other ' 工作表名称
+	v7 = right(today,4)
+	other = "杂项"
+	
+	On Error Resume Next
+	Set wb_pool = xl.Workbooks.Open(path & "\总" & today)
+	Set ws_v7 = wb_pool.worksheets(v7)
+	Set ws_other = wb_pool.worksheets(other)
+	On Error GoTo 0
+	
+	If isempty(wb_pool) Then
+		xl.workbooks.add
+		xl.activeworkbook.saveas path & "\总" & today
+		Set wb_pool = xl.activeworkbook
+	End If
+	If isempty(ws_v7) Then
+		wb_pool.worksheets(1).name = v7
+		Set ws_v7 = wb_pool.worksheets(v7)
+	End If
+	If isempty(ws_other) Then
+		wb_pool.worksheets.add , wb_pool.worksheets(1)
+		wb_pool.activesheet.name = other
+		Set ws_other = wb_pool.worksheets(other)
+	End If
+	If wb_pool.readonly Then
+		msgbox "汇总池已在其他电脑打开，请先关闭"
+		wb_pool.close(False)
+		FastWB False
+		Set ws_v7 = Nothing
+		Set ws_other = Nothing
+		Set wb_pool = Nothing
+		Set ws = Nothing
+		Set wb = Nothing
+		Set xl = Nothing
+		Set fso = Nothing
+		Exit Sub
+	End If
+	
+	' xl.visible = false
+	
+	FastWB True
+	
+	data = ws.usedrange
+	
+	data_process ws_run, data
+	
+	FastWB False
+	
+	' xl.visible = true
+	
+	erase data
+	erase table
+	
+	set dic_x = Nothing
+	set dic_y = Nothing
+	Set ws = Nothing
+	Set wb = Nothing
+	Set xl = Nothing
+	Set fso = Nothing
+	
+End Sub
+
+
+Function get_param(ByRef table, ByVal item, ByVal elem, ByVal param)
+	
+	' item: 项目简称
+	' elem: 元素符号
+	' param: 参数名称
+	
+	' 功能：获取指定的项目和元素的参数信息
+	' 若无参数信息则返回 Empty
+	
+	' Dim i, j, title
+	
+	' title = xl.index(table, 1)
+	
+	' For i = 1 To UBound(table)
+		' If table(i, 1) = item And elem = "All" Then
+			' ' 查找公共属性（质控传输字符串，路径等）
+			' For j = 1 To ubound(title)
+				' If instr(param, table(1, j)) Then
+					' get_param = table(i, j)
+					' Exit Function
+				' End If
+			' Next
+		' ElseIf table(i, 1) = item And instr(elem, table(i, 2)) Then
+			' For j = 1 To ubound(title)
+				' If instr(param, table(1, j)) Then
+					' get_param = table(i, j)
+					' Exit Function
+				' End If
+			' Next
+		' End If
+	' Next
+	
+	dim x, y, i
+	
+	for i = 2 to ubound(table)
+		if instr(elem, table(i,2)) then
+			elem = table(i,2)
+			exit for
+		end if
+	next
+	
+	for i = 1 to ubound(xl.index(table, 1))
+		if instr(param, table(1,i)) then
+			param = table(1,i)
+			exit for
+		end if
+	next
+	
+	
+	if elem = "All" then
+		x = dic_x(item)
+	else
+		x = dic_x(item&elem)
+	end if
+	y = dic_y(param)
+	
+
+	on error resume next
+	get_param = table(x, y)
+	on error goto 0
+	
+End Function
+
+
+
+Sub data_process(ByRef ws, ByRef data)
+	
+	Dim lastrow, lastcol
+	Dim r, c
+	
+	If data(1,1) <> "Sample" Then Exit Sub
+	
+	lastrow = ubound(data)
+	lastcol = ubound(xl.index(data,1))
+	
+	With ws
+		
+		.cells.clear
+		.range("A1").resize(lastrow, lastcol) = data
+		
+		
+		For c = lastcol To 1 Step -1
+			' 删除内标列，多余列
+			If instr(data(2,c), "ISTD") Then
+				.columns(c).delete
+			ElseIf instr(data(2,c), "Rjct") Then
+				.columns(c).delete
+			ElseIf data(2,c) = "" Then
+				.columns(c).delete
+			ElseIf instr(data(2,c), "Conc") And instr(data(2,c), "RSD") = 0 Then
+				' 删除参数表中没有的项目列（浓度列和RSD列）
+				If isempty(get_param(table, item, data(1,c), symbol)) Then
+					.columns(c).delete
+					.columns(c).delete
+				End If
+			End If
+		Next 
+		
+		'  删除空白行，最后一列是否为空则删除整行
+		For r = lastrow To 2 Step -1
+			If data(r, lastcol) = "" Then
+				.rows(r).delete
+			End If
+		Next
+		
+		' 因为删除了某些行和列，需重新赋值列表
+		data = .usedrange
+		lastrow = ubound(data)
+		lastcol = ubound(xl.index(data,1))
+		
+		
+		
+		' 判断RSD
+		For c = lastcol To 2 Step -1
+			elem = data(1,c-1)
+			If instr(data(2,c), "RSD") Then
+				For r = 2 To lastrow
+					If isnumeric(data(r,c)) Then
+						If data(r,c) = "" Or data(r,c) > get_param(table, item, elem, RSD) Then
+							.cells(r,c-1).font.bold = True
+						End If
+					End If
+				Next
+				.columns(c).delete
+			End If
+		Next 
+		
+		If data(2,1) = "Data File" Then
+			.rows(2).delete
+		End If
+		
+		If item = "V7" Then
+			' cut Ca
+			.columns("C").cut
+			.columns("I").insert
+		End If 
+		
+		' 因为删除了某些行和列，需重新赋值列表
+		data = .usedrange
+		lastrow = ubound(data)
+		lastcol = ubound(xl.index(data,1))
+		
+		
+		On Error Resume Next
+		Dim samplename
+		' 如果参数表中未设置曲线浓度，则删除曲线
+		For c = 2 To lastcol
+			For r = lastrow To 2 Step -1
+				elem = data(1,c)
+				samplename = data(r,1)
+				If instr(samplename, "STD") Then
+					If isempty(get_param(table, item, elem, samplename)) Then
+						.rows(r).delete
+					End If
+				End If
+			Next 
+		Next
+		
+		' 因为删除了某些行和列，需重新赋值列表
+		data = .usedrange
+		lastrow = ubound(data)
+		lastcol = ubound(xl.index(data,1))
+		
+
+		' QC1传输字符串设置
+		For r = 2 To lastrow
+			If instr(data(r,1), "QC1") And Not isempty(get_param(table, item, "All", QC1)) Then
+				data(r,1) = get_param(table, item, "All", QC1)
+			ElseIf instr(data(r,1), "QC2") And Not isempty(get_param(table, item, "All", QC2)) Then
+				data(r,1) = get_param(table, item, "All", QC2)
+			End If
+		Next
+		
+		
+		' 曲线回收率
+		For c = 2 To lastcol
+			For r = lastrow To 2 Step -1
+				elem = data(1,c)
+				samplename = data(r,1)		
+				If instr(samplename, "STD0") = 0 And instr(samplename, "STD") Then
+					If isnumeric(data(r,c))Then
+						data(r,c) = data(r,c) / get_param(table, item, elem, samplename)
+						If data(r,c) > 1.15 Or data(r,c) < 0.85 Then
+							.cells(r,c).interior.colorindex = 17
+						End If
+						.rows(r).numberformat = "0%" 
+					End If
+				End If
+			Next 
+		Next 
+		
+		' 修改标题行为元素符号+单位
+		For c = 2 To lastcol
+			elem = data(1,c)
+			data(1,c) = get_param(table, item, elem, symbol) + _
+			"(" + get_param(table, item, elem, unit) + ")"
+		Next 
+		
+		
+		' 高低值显色（曲线质控不显颜色）
+		Const xland = 1
+		Const xlor = 2
+		For c = 2 To lastcol
+			elem = data(1,c)
+			.range("A1").autofilter c, ">=" & get_param(table, item, elem, high), _
+			xlor, "<=" & get_param(table, item, elem, low)
+			.range("A1").autofilter 1, "<>*QC*", xland, "<>*STD*"
+			.range("A2:A" & lastrow).offset(0,c-1).specialcells(12).interior.colorindex = 17
+			.range("A1").autofilter
+		Next
+		
+		
+		Dim up, down
+		For c = 2 To lastcol
+			For r = 2 To lastrow
+				elem = data(1,c)
+				samplename = data(r,1)
+				If instr(samplename, "QC") Then
+					' QC保留两位小数
+					data(r,c) = round(data(r,c),2)
+				Elseif instr(samplename, "STD") = 0 then
+					' 保留小数位数
+					data(r,c) = round(data(r,c),get_param(table, item, elem, digits))
+					
+					' 转换上下限
+					up = get_param(table, item, elem, upper)
+					down = get_param(table, item, elem, limit)
+					
+					If Not isempty(up) And instr(data(r,c), "<") =0 And data(r,c) > up Then
+						data(r,c) = ">" & up
+					ElseIf Not isempty(down) And data(r,c) < down Then
+						data(r,c) = "<" & down
+					End If
+				End If
+			Next 
+		Next 
+		
+		.cells.clearcontent
+		' 将最终的列表粘贴到工作表
+		.usedrange = data
+		
+		
+		' 排序曲线和质控
+		Const xlSortOnFontColor = 2
+		Const xlAscending = 1
+		Const xlSortNormal = 0
+		Const xlyes = 1
+		Const xlTopToButtom = 1
+		Const xlPinYin = 1
+		
+		.Range("A1").AutoFilter 1, "=STD*", xlOr, "=*QC*"
+		.usedrange.SpecialCells(12).Font.Color = 255
+		.Range("A1").AutoFilter
+		
+		.Sort.SortFields.Clear
+		.Sort.SortFields.Add(.Range("A1:A" & lastrow), _
+		xlSortOnFontColor, xlAscending, , xlSortNormal).SortOnValue.Color = RGB(255, 0, 0)
+		With .Sort
+			.SetRange ws.usedrange
+			.Header = xlyes
+			.MatchCase = False
+			.Orientation = xlTopToButtom
+			.SortMethod = xlPinYin
+			.Apply
+		End With
+		.usedrange.Font.ColorIndex = 0
+		On Error GoTo 0
+		
+		' 设置行高列宽
+		.usedrange.ColumnWidth = 10.38
+		If lastrow > 71 Then
+			.usedrange.RowHeight = 10.75
+		ElseIf lastrow > 67 Then
+			.usedrange.RowHeight = 11
+		ElseIf lastrow > 63 Then
+			.usedrange.RowHeight = 11.75
+		Else
+			.usedrange.RowHeight = 12.5
+		End If
+		
+		' 实验号靠左，数据居中显示
+		Const xlCenter = -4108
+		Const xlleft = -4131
+		.usedrange.VerticalAlignment = xlCenter
+		.usedrange.HorizontalAlignment = xlCenter
+		.columns(1).HorizontalAlignment = xlleft
+		
+		' 页眉页脚
+		With .PageSetup
+			.CenterHeader = "&D " & Instrname & " 结果"
+			.LeftFooter = "操作："
+			.RightFooter = "□已点_________□已审_________□审批_________ "
+			.PrintGridlines = True
+		End With
+		
+		' 判断V7结果是否相同
+		if item = "V7" then
+			data = .usedrange
+			SameOrNot data
+			.usedrange = data
+		else
+			data = .usedrange
+		end if
+		
+		data_to_csv data
+	
+		data_to_pool data
+	
+		' Dim PrintOrNot
+		' PrintOrNot = MsgBox("是否打印数据?", 4, "提示")
+		' If PrintOrNot = 6 Then .usedrange.printout
+		
+	End With
+	
+End Sub
+
+
+sub SameOrNot(byref data)
+	
+	' 判断七项结果是否两两相同
+	
+	dim lastrow, lastcol
+	dim r, c, i
+	dim same
+	dim E
+	
+	lastrow = ubound(data)
+	lastcol = ubound(xl.index(data,1))
+
+	For r = 2 To lastrow - 1
+        For i = r + 1 To lastrow
+            same = 0
+            For c = 2 To lastcol
+                If InStr(data(r, 1), "QC") = 0 And InStr(data(r, 1), "STD") = 0 Then
+					elem = data(1, c)
+					' E = get_param(table, item, elem, ALE)
+					E = "5%"
+                    On Error Resume Next
+					if not isempty(E) then
+						if instr(E, "%") then
+							E = replace(E,"%","") * (1/100) ' 百分数转换为小数
+							If Abs(data(i, c) - data(r, c)) < E * data(r, c) Then
+								same = same + 1
+							End If
+						else
+							If Abs(data(i, c) - data(r, c)) < E Then
+								same = same + 1
+							End If
+						end if
+					end if
+                    On Error GoTo 0
+                End If
+                
+                If same = lastcol - 1 Then
+                    data(r, 1) = data(r, 1) & "○"
+                    data(i, 1) = data(i, 1) & "○"
+                End If
+            Next
+        Next
+    Next
+	
+end sub
+
+
+Sub data_to_csv(ByRef data)
+	
+	' 将数据粘贴到上传模板csv文件中
+	
+	Dim lastrow, lastcol
+	Dim r, i
+	
+	' 打开上传模板
+	For i = 0 To ubound(csvpath)
+		On Error Resume Next
+		Set wb_csv = xl.Workbooks.Open(csvpath(i))
+		Set ws_csv = wb_csv.activesheet
+		On Error GoTo 0
+		If isempty(wb_csv) Then
+			msgbox "无法打开上传模板，请确认路径 " & csvpath
+			Exit Sub
+		End If
+		
+		ws_csv.range("A2").resize(65536, 1024).clear
+		ws_csv.range("A2").resize(lastrow, lastcol) = data
+		
+		wb_csv.close(True)
+	Next
+End Sub
+
+
+
+Sub data_to_pool(ByRef data)
+	
+	' 将数据粘贴到汇总池
+	Dim lastrow 
+	Dim to_ws
+	
+	If item = "V7" Then
+		Set to_ws = ws_v7
+	Else
+		Set to_ws = ws_other
+	End If
+	
+	lastrow = to_ws.usedrange.rows.count
+	
+	If lastrow = 1 Then
+		to_ws.range("A1").resize(ubound(data), ubound(xl.index(data,1))) = data
+		to_ws.range("A1") = time
+	Else
+		to_ws.range("A" & lastrow+1).resize(ubound(data), ubound(xl.index(data,1))) = data
+		to_ws.range("A" & lastrow+1) = time
+	End If
+	
+	Set to_ws = Nothing
+	
+	wb_pool.close(True)
+	
+End Sub
+
+
+Public Sub FastWB(ByVal opt)
+	With xl
+		If opt Then	
+			.calculation = -4135 ' xlCalculationManual
+		Else
+			.calculation = -4105 ' xlCalculationAutomatic
+		End If
+		If .PrintCommunication <> Not opt Then .PrintCommunication = Not opt
+		If .DisplayAlerts <> Not opt Then .DisplayAlerts = Not opt
+		If .DisplayStatusBar <> Not opt Then .DisplayStatusBar = Not opt
+		If .EnableAnimations <> Not opt Then .EnableAnimations = Not opt
+		If .EnableEvents <> Not opt Then .EnableEvents = Not opt
+		If .ScreenUpdating <> Not opt Then .ScreenUpdating = Not opt
+	End With
+	FastWS ws, opt
+End Sub
+
+
+Public Sub FastWS(ByRef ws, ByVal opt)
+	If ws Is Nothing Then
+		ws = xl.activeworkbook.activesheet
+		OptimiseWS ws, opt
+	Else
+		OptimiseWS ws, opt
+	End If
+	' If ws Is Nothing Then
+	' For Each ws In Application.ThisWorkbook.Sheets
+	' OptimiseWS ws, opt
+	' Next
+	
+	' Else
+	' OptimiseWS ws, opt
+	' End If
+End Sub
+
+Private Sub OptimiseWS(ByVal ws, ByVal opt)
+	With ws
+		.DisplayPageBreaks = False
+		.EnableCalculation = Not opt
+		.EnableFormatConditionsCalculation = Not opt
+		.EnablePivotTable = Not opt
+	End With
+End Sub
+
+
+
+
+
