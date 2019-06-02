@@ -262,13 +262,15 @@ Sub data_process(ByRef ws)
     With ws
         
         data = .UsedRange
+
         If Not IsArray(data) Then
             ' msgbox "未找到数据"
             Exit Sub
         End If
         
-        If data(1, 1) <> "Sample" Then Exit Sub
-        
+
+        If data(1, 1) <> "Sample" and  data(1, 1) <> "样品" Then Exit Sub
+
         lastrow = UBound(data)
         lastcol = UBound(xl.Index(data, 1))
         
@@ -277,13 +279,13 @@ Sub data_process(ByRef ws)
         
         For c = lastcol To 1 Step -1
             ' 删除内标列，多余列
-            If InStr(data(2, c), "ISTD") Then
+            If InStr(data(2, c), "%") Then
                 .Columns(c).Delete
-            ElseIf InStr(data(2, c), "Rjct") Then
+            ElseIf InStr(data(2, c), "Rjct") or InStr(data(2, c), "拒绝")  Then
                 .Columns(c).Delete
             ElseIf Len(data(2, c)) = 0 Then
                 .Columns(c).Delete
-            ElseIf Len(data(1, c)) > 0 Then
+            ElseIf data(1, c) <> "" Then
                 ' 删除参数表中没有的项目列（浓度列和RSD列）
                 elem = data(1, c)
                 If IsEmpty(get_param(table, item, elem, symbol)) Then
@@ -303,6 +305,10 @@ Sub data_process(ByRef ws)
         
         ' 因为删除了某些行和列，需重新取列表
         data = .UsedRange
+		If Not IsArray(data) Then
+            ' msgbox "未找到数据"
+            Exit Sub
+        End If
         lastrow = UBound(data)
         lastcol = UBound(xl.Index(data, 1))
         
@@ -330,10 +336,15 @@ Sub data_process(ByRef ws)
             .Columns("I").Insert
         End If
         
-        If data(2, 1) = "Data File" Then .Rows(2).Delete
+        If data(2, 1) = "Data File" or data(2, 1) = "样品名称"  Then .Rows(2).Delete
         
+		
         ' 因为删除了某些行和列，需重新取列表
         data = .UsedRange
+		If Not IsArray(data) Then
+            ' msgbox "未找到数据"
+            Exit Sub
+        End If
         lastrow = UBound(data)
         lastcol = UBound(xl.Index(data, 1))
         
@@ -353,6 +364,10 @@ Sub data_process(ByRef ws)
         
         ' 因为删除了某些行和列，需重新取列表
         data = .UsedRange
+		If Not IsArray(data) Then
+            ' msgbox "未找到数据"
+            Exit Sub
+        End If
         lastrow = UBound(data)
         lastcol = UBound(xl.Index(data, 1))
         
@@ -464,7 +479,7 @@ Sub data_process(ByRef ws)
         .UsedRange.VerticalAlignment = xlCenter
         .UsedRange.HorizontalAlignment = xlCenter
         .Columns(1).HorizontalAlignment = xlleft
-        
+        .usedrange.font.Name = "Arial"
         ' xl.ActiveWindow.SmallScroll -150
         
         ' 设置页眉页脚
@@ -706,10 +721,3 @@ Private Sub OptimiseWS(ByVal ws, ByVal opt)
         .EnablePivotTable = Not opt
     End With
 End Sub
-
-
-
-
-
-
-
